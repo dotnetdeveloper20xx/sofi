@@ -265,66 +265,247 @@ public class AppUserRepository : IAppUserRepository
 
 ---
 
-
-
 ## 🚧 Phase 2: Core Features & Modules
+### 📊 2.1 Dashboard Module
 
-### 🔐 2.1 Authentication & Authorization
-- Implement JWT token generation in `AuthController`
-- Configure token validation in `Startup.cs`
-- Roles: Admin, Analyst, Manager, Viewer
-- Blazor integration:
-  - Use `AuthenticationStateProvider` for role-based UI rendering
-  - Protect pages/components using `[Authorize]` attribute
+#### ✅ DashboardOverviewDto.cs
+```csharp
+public class DashboardOverviewDto
+{
+    public decimal TotalAssets { get; set; }
+    public double AveragePerformance { get; set; }
+    public int RiskWarnings { get; set; }
+    public List<string> Recommendations { get; set; }
+}
+```
 
-### 📊 2.2 Dashboard Module
-- Razor Page: `Dashboard.razor`
-- Components:
-  - `ChartTile.razor` (uses mock chart data)
-  - `RiskBadge.razor` (color-coded risk score)
-  - `RecommendationList.razor` (list of AI suggestions)
-- Backend:
-  - `DashboardController.cs`
-    - `GET /api/dashboard/overview`
-    - `GET /api/ai/recommendations`
+#### ✅ IDashboardService.cs
+```csharp
+public interface IDashboardService
+{
+    Task<DashboardOverviewDto> GetOverviewAsync();
+}
+```
 
-### 💼 2.3 Fund Management
-- Blazor Pages:
-  - `FundList.razor`: List all funds with pagination & search
-  - `FundDetail.razor`: Show fund overview + charts
-  - `FundForm.razor`: Create/edit fund
-- Backend API:
-  - `FundController.cs`
-    - `GET /api/funds`, `POST`, `PUT`, `DELETE`
-- Frontend:
-  - `FundService.cs` (HttpClient service layer)
-- Validation:
-  - Use FluentValidation for Create/Update Fund DTOs
+#### ✅ DashboardService.cs
+```csharp
+public class DashboardService : IDashboardService
+{
+    public async Task<DashboardOverviewDto> GetOverviewAsync()
+    {
+        // Mock data for demo purposes
+        return await Task.FromResult(new DashboardOverviewDto
+        {
+            TotalAssets = 1050000000,
+            AveragePerformance = 7.5,
+            RiskWarnings = 2,
+            Recommendations = new List<string> { "Rebalance Fund A", "Reduce tech exposure" }
+        });
+    }
+}
+```
 
-### 📂 2.4 Portfolio Comparison
-- Page: `PortfolioCompare.razor`
-- Compare funds by performance/risk
-- API Endpoint: `GET /api/portfolios/{id}/compare`
+#### ✅ DashboardController.cs
+```csharp
+[ApiController]
+[Route("api/dashboard")]
+public class DashboardController : ControllerBase
+{
+    private readonly IDashboardService _dashboardService;
 
-### 🧠 2.5 AI Insight Engine
-- Backend: Mock service returning suggestions
-- API Endpoints:
-  - `/api/ai/recommendations`
-  - `/api/risk/fund/{id}`
-- Later Phase: Integrate ML.NET or external API
+    public DashboardController(IDashboardService dashboardService)
+    {
+        _dashboardService = dashboardService;
+    }
 
-### 🧪 2.6 Risk Scoring
-- Score computed per fund using mock data (Phase 1)
-- Component: `RiskBadge.razor`
-- API: `GET /api/risk/fund/{id}`
+    [HttpGet("overview")]
+    public async Task<IActionResult> GetOverview()
+    {
+        var overview = await _dashboardService.GetOverviewAsync();
+        return Ok(overview);
+    }
+}
+```
 
-### 🧾 2.7 Reporting & Exports
-- Component: `Export.razor`
-- PDF/Excel export of reports
-- API: `/api/reports/export`
-- Later: Scheduled email delivery (Phase 3)
+#### ✅ Blazor Page: Dashboard.razor
+```razor
+@page "/dashboard"
+@inject HttpClient Http
+
+<h2>Dashboard Overview</h2>
+
+@if (overview == null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <div>
+        <p><strong>Total Assets:</strong> @overview.TotalAssets.ToString("C")</p>
+        <p><strong>Avg Performance:</strong> @overview.AveragePerformance %</p>
+        <p><strong>Risk Warnings:</strong> @overview.RiskWarnings</p>
+        <h4>AI Recommendations</h4>
+        <ul>
+            @foreach (var rec in overview.Recommendations)
+            {
+                <li>@rec</li>
+            }
+        </ul>
+    </div>
+}
+
+@code {
+    private DashboardOverviewDto overview;
+
+    protected override async Task OnInitializedAsync()
+    {
+        overview = await Http.GetFromJsonAsync<DashboardOverviewDto>("api/dashboard/overview");
+    }
+}
+```
+
+#### ✅ Add DTO to Web Project
+```csharp
+public class DashboardOverviewDto
+{
+    public decimal TotalAssets { get; set; }
+    public double AveragePerformance { get; set; }
+    public int RiskWarnings { get; set; }
+    public List<string> Recommendations { get; set; }
+}
+```
 
 ---
+
+### 💼 2.2 Fund Management Module
+
+#### ✅ Fund.cs (Domain)
+```csharp
+public class Fund
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public decimal Value { get; set; }
+    public double Performance { get; set; }
+    public string RiskLevel { get; set; }
+}
+```
+
+#### ✅ FundDto.cs
+```csharp
+public class FundDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public decimal Value { get; set; }
+    public double Performance { get; set; }
+    public string RiskLevel { get; set; }
+}
+```
+
+#### ✅ IFundService.cs
+```csharp
+public interface IFundService
+{
+    Task<List<FundDto>> GetAllAsync();
+    Task<FundDto> GetByIdAsync(int id);
+    Task<int> CreateAsync(FundDto dto);
+    Task UpdateAsync(FundDto dto);
+    Task DeleteAsync(int id);
+}
+```
+
+#### ✅ FundService.cs
+```csharp
+public class FundService : IFundService
+{
+    private readonly ApplicationDbContext _db;
+    private readonly IMapper _mapper;
+
+    public FundService(ApplicationDbContext db, IMapper mapper)
+    {
+        _db = db;
+        _mapper = mapper;
+    }
+
+    public async Task<List<FundDto>> GetAllAsync()
+    {
+        var funds = await _db.Funds.ToListAsync();
+        return _mapper.Map<List<FundDto>>(funds);
+    }
+
+    public async Task<FundDto> GetByIdAsync(int id)
+    {
+        var fund = await _db.Funds.FindAsync(id);
+        return _mapper.Map<FundDto>(fund);
+    }
+
+    public async Task<int> CreateAsync(FundDto dto)
+    {
+        var fund = _mapper.Map<Fund>(dto);
+        _db.Funds.Add(fund);
+        await _db.SaveChangesAsync();
+        return fund.Id;
+    }
+
+    public async Task UpdateAsync(FundDto dto)
+    {
+        var fund = await _db.Funds.FindAsync(dto.Id);
+        if (fund == null) throw new Exception("Not found");
+        _mapper.Map(dto, fund);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task DeleteAsync(int id)
+    {
+        var fund = await _db.Funds.FindAsync(id);
+        _db.Funds.Remove(fund);
+        await _db.SaveChangesAsync();
+    }
+}
+```
+
+#### ✅ FundController.cs
+```csharp
+[ApiController]
+[Route("api/funds")]
+public class FundController : ControllerBase
+{
+    private readonly IFundService _fundService;
+
+    public FundController(IFundService fundService)
+    {
+        _fundService = fundService;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll() => Ok(await _fundService.GetAllAsync());
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> Get(int id) => Ok(await _fundService.GetByIdAsync(id));
+
+    [HttpPost]
+    public async Task<IActionResult> Create(FundDto dto)
+    {
+        var id = await _fundService.CreateAsync(dto);
+        return CreatedAtAction(nameof(Get), new { id }, dto);
+    }
+
+    [HttpPut]
+    public async Task<IActionResult> Update(FundDto dto)
+    {
+        await _fundService.UpdateAsync(dto);
+        return NoContent();
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        await _fundService.DeleteAsync(id);
+        return NoContent();
+    }
+}
+```
 
 ## 🧱 Phase 3: Infrastructure & Cross-Cutting Concerns
 
