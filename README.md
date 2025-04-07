@@ -509,23 +509,167 @@ public class FundController : ControllerBase
 
 ## 🧱 Phase 3: Infrastructure & Cross-Cutting Concerns
 
-### 3.1 Database Configuration
-- DbContext in `SOFI.Persistence`
-- Use `Code-First Migrations`
-- Seed users, funds, portfolios
+### ✅ 3.1 Database Configuration (EF Core)
 
-### 3.2 Dependency Injection
-- Register services in `Startup.cs` or `Program.cs`
-- Use `IServiceCollection` extensions for organization
+#### 🔷 ApplicationDbContext.cs (in Persistence)
+```csharp
+public class ApplicationDbContext : DbContext
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) {}
 
-### 3.3 Logging & Monitoring
-- Use `Serilog` for structured logs
-- Integrate with Azure Application Insights
+    public DbSet<Fund> Funds { get; set; }
+    public DbSet<AppUser> AppUsers { get; set; }
 
-### 3.4 CI/CD Pipeline (Azure DevOps)
-- YAML pipeline:
-  - Restore, Build, Test, Publish
-  - Deploy to Azure App Service
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<Fund>().HasData(
+            new Fund { Id = 1, Name = "Pension Growth Fund", Value = 250000000, Performance = 7.2, RiskLevel = "Medium" },
+            new Fund { Id = 2, Name = "Stable Income Fund", Value = 150000000, Performance = 4.3, RiskLevel = "Low" }
+        );
+
+        modelBuilder.Entity<AppUser>().HasData(
+            new AppUser
+            {
+                Id = Guid.NewGuid(),
+                Email = "admin@sofi.com",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("P@ssword123"),
+                Role = "Admin"
+            }
+        );
+    }
+}
+```
+
+#### 🔷 appsettings.json (Connection String)
+```json
+"ConnectionStrings": {
+  "DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=SOFI_Db;Trusted_Connection=True;MultipleActiveResultSets=true"
+}
+```
+
+#### 🔷 Register DbContext in Program.cs
+```csharp
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+```
+
+---
+
+### ✅ 3.2 Dependency Injection (DI)
+
+#### 🔷 Program.cs Example
+```csharp
+// Application Services
+builder.Services.AddScoped<IFundService, FundService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+
+// Repositories
+builder.Services.AddScoped<IAppUserRepository, AppUserRepository>();
+
+// AutoMapper
+builder.Services.AddAutoMapper(typeof(Program));
+```
+
+#### 🔷 Best Practices
+- Group service registrations in extension methods
+- Keep DI setup in `Program.cs` clean and modular
+
+---
+
+### ✅ 3.3 Logging & Monitoring
+
+#### 🔷 Add Serilog NuGet Package
+```bash
+dotnet add package Serilog.AspNetCore
+```
+
+#### 🔷 Configure Serilog in Program.cs
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("Logs/sofi-log.txt", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+```
+
+#### 🔷 Sample Log Usage
+```csharp
+_logger.LogInformation("User {Email} logged in successfully", dto.Email);
+_logger.LogWarning("Unauthorized access attempt");
+```
+
+#### 🔷 Application Insights (optional)
+- Add Application Insights from Azure Portal
+- Add `Microsoft.ApplicationInsights.AspNetCore` package
+- Add this to `Program.cs`
+```csharp
+builder.Services.AddApplicationInsightsTelemetry(builder.Configuration["ApplicationInsights:InstrumentationKey"]);
+```
+
+---
+
+### ✅ 3.4 CI/CD Pipeline (Azure DevOps)
+
+#### 🔷 azure-pipelines.yml (Basic Example)
+```yaml
+trigger:
+  - main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+
+steps:
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '7.x.x'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Restore packages'
+  inputs:
+    command: 'restore'
+    projects: '**/*.csproj'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Build'
+  inputs:
+    command: 'build'
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfiguration)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run Tests'
+  inputs:
+    command: 'test'
+    projects: '**/*Tests.csproj'
+    arguments: '--configuration $(buildConfiguration)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Publish'
+  inputs:
+    command: 'publish'
+    publishWebProjects: true
+    arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'drop'
+```
+
+#### 🔷 Deployment to Azure
+- Use **App Service Deploy** task
+- Configure service connection in Azure DevOps to your subscription
+
+
+
 
 ---
 
