@@ -22,6 +22,7 @@
 
 ---
 
+
 ## ✅ Phase 1: Project Setup
 
 ### 1.1 Solution Structure
@@ -40,7 +41,14 @@ SOFI.Solution/
     └── SOFI.IntegrationTests/
 ```
 
-### 1.2 NuGet Dependencies
+### 1.2 Project References
+- `SOFI.Api` → references `Application`, `Domain`, `Infrastructure`, `Persistence`, `Shared`
+- `SOFI.Application` → references `Domain`, `Shared`
+- `SOFI.Infrastructure` → references `Application`, `Domain`
+- `SOFI.Persistence` → references `Application`, `Domain`, `Shared`
+- `SOFI.Web` → references `Shared`
+
+### 1.3 NuGet Dependencies
 Install the following packages where needed:
 - `Microsoft.EntityFrameworkCore.SqlServer`
 - `Microsoft.AspNetCore.Authentication.JwtBearer`
@@ -49,8 +57,215 @@ Install the following packages where needed:
 - `Serilog.AspNetCore`
 - `FluentValidation.AspNetCore`
 - `xUnit`, `bUnit`, `Moq`, `Microsoft.AspNetCore.Mvc.Testing`
+- `BCrypt.Net-Next` for password hashing
 
 ---
+
+## 🛠️ Full Implementation – JWT Authentication
+
+### ✅ Program.cs for SOFI.Api
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// JWT Auth
+builder.Services.AddAuthentication("Bearer")
+    .AddJwtBearer("Bearer", options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+        };
+    });
+builder.Services.AddAuthorization();
+
+// App DI setup
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IAppUserRepository, AppUserRepository>();
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddAutoMapper(typeof(Program));
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+```
+
+---
+
+### ✅ AuthController.cs
+```csharp
+[ApiController]
+[Route("api/auth")]
+public class AuthController : ControllerBase
+{
+    private readonly IAuthService _authService;
+
+    public AuthController(IAuthService authService)
+    {
+        _authService = authService;
+    }
+
+    [HttpPost("login")]
+    public async Task<IActionResult> Login(LoginRequestDto dto)
+    {
+        var result = await _authService.LoginAsync(dto);
+        return Ok(result);
+    }
+}
+```
+
+---
+
+### ✅ AppUser.cs (Domain)
+```csharp
+public class AppUser
+{
+    public Guid Id { get; set; }
+    public string Email { get; set; }
+    public string PasswordHash { get; set; }
+    public string Role { get; set; } // Admin, Analyst, Manager, Viewer
+}
+```
+
+---
+
+### ✅ DTOs (Application)
+```csharp
+public class LoginRequestDto
+{
+    public string Email { get; set; }
+    public string Password { get; set; }
+}
+
+public class AuthResponseDto
+{
+    public string Token { get; set; }
+    public string Role { get; set; }
+}
+```
+
+---
+
+### ✅ IAuthService.cs
+```csharp
+public interface IAuthService
+{
+    Task<AuthResponseDto> LoginAsync(LoginRequestDto loginDto);
+}
+```
+
+---
+
+### ✅ AuthService.cs (Application.Services)
+```csharp
+public class AuthService : IAuthService
+{
+    private readonly IAppUserRepository _userRepo;
+    private readonly IConfiguration _config;
+
+    public AuthService(IAppUserRepository userRepo, IConfiguration config)
+    {
+        _userRepo = userRepo;
+        _config = config;
+    }
+
+    public async Task<AuthResponseDto> LoginAsync(LoginRequestDto dto)
+    {
+        var user = await _userRepo.GetByEmailAsync(dto.Email);
+        if (user == null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+            throw new UnauthorizedAccessException("Invalid credentials.");
+
+        var token = GenerateJwtToken(user);
+
+        return new AuthResponseDto { Token = token, Role = user.Role };
+    }
+
+    private string GenerateJwtToken(AppUser user)
+    {
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim(ClaimTypes.Email, user.Email),
+            new Claim(ClaimTypes.Role, user.Role)
+        };
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: _config["Jwt:Issuer"],
+            audience: _config["Jwt:Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(8),
+            signingCredentials: creds
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+}
+```
+
+---
+
+### ✅ IAppUserRepository.cs
+```csharp
+public interface IAppUserRepository
+{
+    Task<AppUser> GetByEmailAsync(string email);
+}
+```
+
+---
+
+### ✅ AppUserRepository.cs (Persistence)
+```csharp
+public class AppUserRepository : IAppUserRepository
+{
+    private readonly ApplicationDbContext _db;
+    public AppUserRepository(ApplicationDbContext db) => _db = db;
+
+    public async Task<AppUser> GetByEmailAsync(string email)
+        => await _db.AppUsers.FirstOrDefaultAsync(x => x.Email == email);
+}
+```
+
+---
+
+### ✅ appsettings.json
+```json
+"Jwt": {
+  "Key": "your-super-secret-key-here",
+  "Issuer": "sofi.api",
+  "Audience": "sofi.web"
+},
+"ConnectionStrings": {
+  "DefaultConnection": "Server=localhost;Database=SOFI_Db;Trusted_Connection=True;MultipleActiveResultSets=true"
+}
+```
+
+---
+
+
 
 ## 🚧 Phase 2: Core Features & Modules
 
